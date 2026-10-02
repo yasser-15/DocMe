@@ -35,6 +35,12 @@ set -eu
 : "${DATABASE_URL:?DATABASE_URL must be set}"
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/migrations}"
 
+# Password for the `docme_client` login role created by 0006_app_access.sql.
+# Passed in as a psql variable rather than written into the migration, because
+# migrations are committed to git and .env is not. Defaults to empty, which makes
+# the migration apply the role without a password — fine for CI, not for use.
+DOCME_CLIENT_PASSWORD="${DOCME_CLIENT_PASSWORD:-}"
+
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "
   create table if not exists public.schema_migrations (
     filename    text primary key,
@@ -69,7 +75,11 @@ for f in "$MIGRATIONS_DIR"/*.sql; do
     echo "commit;"
   } > "$tmp"
 
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$tmp"
+  # `--set` (not `-v`) keeps this parseable when the password contains '=' or
+  # starts with '-'. The migration references it as :'client_password'.
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
+       --set=client_password="$DOCME_CLIENT_PASSWORD" \
+       -f "$tmp"
   rm -f "$tmp"
 done
 

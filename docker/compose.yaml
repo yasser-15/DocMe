@@ -77,6 +77,10 @@ services:
       DATABASE_URL: >-
         postgres://${POSTGRES_USER:-docme_app}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-docme}
       MIGRATIONS_DIR: /migrations
+      # Consumed by 0006_app_access.sql, which creates the `docme_client` login
+      # role the Flutter app connects as. Kept out of the migration file because
+      # migrations are committed and this is a secret.
+      DOCME_CLIENT_PASSWORD: ${DOCME_CLIENT_PASSWORD:-}
     volumes:
       # Read-only: a migration run must never be able to edit our source.
       - ../supabase/migrations:/migrations:ro
