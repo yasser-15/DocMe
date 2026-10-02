@@ -1,0 +1,19 @@
+name: docme_ui
+description: "DocMe design system — Liquid Glass tokens, theme, and shared content surfaces."
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.13.5
+  flutter: ">=3.41.0"
+
+dependencies:
+  cupertino_icons: ^2.0.0
+  flutter:
+    sdk: flutter
+  liquid_glass_widgets: ^1.8.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
