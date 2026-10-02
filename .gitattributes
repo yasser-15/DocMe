@@ -1,0 +1,18 @@
+# These files are mounted into Linux containers (docker/migrate.sh is bind-mounted
+# into the postgres image and executed with /bin/sh), so they must stay LF.
+#
+# Without this, Git on Windows converts them to CRLF on checkout via the default
+# core.autocrlf=true, and the container then fails with a baffling
+# `\r: command not found` on every line of the script.
+
+*.sh    text eol=lf
+Dockerfile text eol=lf
+*.sql   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+
+# Keep binaries binary.
+*.png   binary
+*.jpg   binary
+*.jar   binary
+*.keystore binary

@@ -73,13 +73,16 @@ model and the glass design language cannot drift apart.
 
 The goal is that no service, app, or job can affect another. What that means concretely:
 
-- **Services** run in their own containers. Postgres lives in `docme-db-1`; nothing is
-  installed on the host beyond Docker itself.
+- **Services** run in their own containers. Postgres lives in a Compose-generated container
+  name; nothing is installed on the host beyond Docker itself.
 - **State** lives in named Docker volumes, never a host bind mount, so
   `docker compose down -v` is a complete reset and the host filesystem stays clean.
-- **Parallel copies** work because there is no `container_name:`. Running
-  `docker compose -p docme-b ...` yields a fully separate stack with its own volumes and
-  ports.
+- **Parallel copies** work because there is no `container_name:` **and no explicit volume
+  or network `name:`**. Both were bugs: pinning `name: docme_pgdata` makes the volume a
+  global resource, so `-p docme-b` attached the second stack to the first stack's
+  database. Compose derives every resource name from the project name. The project name
+  and port both come from the env file, so a second copy needs its own env file
+  (`-EnvFile .env.b` on the task runner).
 - **Network exposure** is loopback-only. Every published port binds `127.0.0.1` because
   this database holds PHI; nothing is reachable from the LAN.
 - **Ports are non-default** (`54329`, not `5432`) so we never fight a Postgres the

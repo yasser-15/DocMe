@@ -131,6 +131,58 @@ begin
 end
 $test$;
 
+-- Identity and migration bookkeeping. Neither table was guarded by a test until
+-- 0005_lock_down.sql fixed both; checks 7 and 8 are what stop them regressing.
+do $identity$
+declare
+  v_patient  constant uuid := '11111111-1111-1111-1111-111111111111';
+  v_count    int;
+begin
+  set local role docme_authenticated;
+
+  ---------------------------------------------------------------------
+  -- CHECK 7: a client sees its own identity row and nobody else's.
+  -- Until 0005, auth.users had no RLS at all, so this returned 3 and every
+  -- logged-in user could read every other account's email and phone.
+  ---------------------------------------------------------------------
+  perform set_config('request.jwt.claims',
+                     json_build_object('sub', v_patient)::text, true);
+
+  select count(*) into v_count from auth.users;
+  if v_count <> 1 then
+    raise exception
+      'CHECK 7 FAILED: client read % auth.users row(s), expected only its own (1). Other accounts'' emails and phone numbers are exposed.',
+      v_count;
+  end if;
+
+  ---------------------------------------------------------------------
+  -- CHECK 8: the migration bookkeeping table is not client-writable.
+  -- The blanket grant in 0004 let a client insert here, which would make the
+  -- migration runner skip a schema change that never actually happened.
+  ---------------------------------------------------------------------
+  begin
+    insert into public.schema_migrations (filename) values ('forged_by_client.sql');
+    raise exception 'CHECK 8 FAILED: client was able to insert into schema_migrations';
+  exception
+    when insufficient_privilege then null;   -- revoked, as required
+  end;
+
+  -- Confirm the write really was refused and not merely rolled back later, by
+  -- checking as the owner, who bypasses RLS and sees the true table contents.
+  --
+  -- `reset role`, not `set local role docme_app`: switching to a role you are not
+  -- a member of requires privileges that docme_authenticated deliberately lacks,
+  -- so the explicit SET would itself fail. RESET restores session_user, which is
+  -- the owner this script connected as.
+  reset role;
+  if exists (select 1 from public.schema_migrations where filename = 'forged_by_client.sql') then
+    raise exception 'CHECK 8 FAILED: the forged migration row was actually persisted';
+  end if;
+
+  raise notice 'Identity and bookkeeping checks passed.';
+end
+$identity$;
+
 -- Clean up so the script is re-runnable.
 do $cleanup$
 declare

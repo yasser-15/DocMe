@@ -8,12 +8,27 @@
 #     reset is `docker compose down -v` and your host stays clean.
 #   * NO `container_name:` anywhere. Compose auto-generates names scoped to the
 #     project, so two clones of this repo can run side by side without
-#     colliding. Use `-p <name>` to run a second isolated copy.
+#     colliding.
+#   * The volume and network also have NO explicit `name:`, for the same reason.
+#     Pinning either to docme_pgdata / docme_default would make them global, and
+#     a second copy started with `-p docme-b` would silently share the first
+#     copy's database. Compose derives them from the project name instead.
 #   * Every published port binds to 127.0.0.1 explicitly. DocMe holds PHI; it
 #     must never be reachable from the LAN.
 #   * Ports are deliberately non-default (54329, not 5432) so we do not fight a
-#     Postgres the developer may already be running.
+#     Postgres the developer may already be running. POSTGRES_PORT comes from the
+#     env file, so a second copy needs its own env file with a different port.
 #   * Credentials come from .env, never from ENV defaults baked into an image.
+#
+# Running a second, fully isolated copy:
+#
+#   copy .env .env.b
+#   # edit .env.b: COMPOSE_PROJECT_NAME=docme-b and POSTGRES_PORT=54330
+#   docker compose --env-file .env.b -f docker/compose.yaml up -d db
+#   docker compose --env-file .env.b -f docker/compose.yaml --profile tools run --rm migrate
+#
+# A different env file is required, not just a different project name: the port
+# and COMPOSE_PROJECT_NAME both come from it.
 #
 # Usage:
 #   docker compose -f docker/compose.yaml up -d db
@@ -115,9 +130,14 @@ services:
     profiles: ["tools"]
 
 volumes:
+  # No `name:` here on purpose. An explicit name makes the volume a global,
+  # fixed resource: `docker compose -p docme-b up` would attach the SECOND copy
+  # to the SAME pgdata volume, so both copies would read and write one database
+  # and `down -v` on either would destroy the other's state. Letting Compose
+  # derive the name from the project gives each copy its own volume.
   pgdata:
-    name: docme_pgdata
 
 networks:
+  # Same reasoning as pgdata: a fixed network name would let the two copies see
+  # each other, and service names like `db` would be ambiguous on that network.
   default:
-    name: docme_default

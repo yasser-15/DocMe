@@ -45,6 +45,10 @@ param(
     [ValidateSet('all', 'docme_core', 'docme_ui', 'patient_app')]
     [string]$Package = 'all',
 
+    # Env file for the compose project name and ports. Copy .env.example to
+    # .env on first use; use a second file to drive a second isolated stack.
+    [string]$EnvFile,
+
     # Any remaining arguments are forwarded to flutter verbatim.
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Rest
@@ -54,7 +58,57 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = $PSScriptRoot
 $JdkPath = 'C:\Program Files\Android\Android Studio\jbr'
-$Compose = @('compose', '--env-file', "$RepoRoot\.env", '-f', "$RepoRoot\docker\compose.yaml")
+
+if (-not $EnvFile) { $EnvFile = Join-Path $RepoRoot '.env' }
+
+# The env file decides the compose project name and the published port, so it is
+# the switch that selects which isolated stack you are talking to. Point
+# -EnvFile at .env.b (with COMPOSE_PROJECT_NAME=docme-b, POSTGRES_PORT=54330)
+# to drive a second copy without disturbing the first.
+$Compose = @('compose', '--env-file', $EnvFile, '-f', "$RepoRoot\docker\compose.yaml")
+
+# Resolve the db container id through compose instead of hardcoding
+# `docme-db-1`. The generated name depends on the project name, so a hardcoded
+# one silently breaks every stack that is not called `docme` — and it fails with
+# a confusing empty health string rather than saying "no such container".
+#
+# Every docker call below is wrapped because $ErrorActionPreference is 'Stop' and
+# PowerShell 7.3+ turns a non-zero native exit code into a terminating error. A
+# stopped database is an expected state to poll through, not a crash.
+function Invoke-DockerQuiet {
+    param([string[]]$Arguments)
+    $out = ''
+    try {
+        $out = (& docker @Arguments 2>$null) -join "`n"
+    } catch {
+        return ''
+    }
+    if ($LASTEXITCODE -ne 0) { return '' }
+    return $out
+}
+
+function Get-DbContainerId {
+    # Built into a variable first: passing `a + b + c` straight into a command
+    # is parsed as a single argument expression, not as a concatenated array.
+    $dockerArgs = @('compose') + $Compose + @('ps', '-q', 'db')
+    $id = Invoke-DockerQuiet $dockerArgs
+    if (-not $id) { return $null }
+    return $id.Trim()
+}
+
+function Wait-DbHealthy {
+    param([int]$TimeoutSec = 90)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $id = Get-DbContainerId
+        if ($id) {
+            $h = Invoke-DockerQuiet @('inspect', '--format', '{{.State.Health.Status}}', $id)
+            if ($h.Trim() -eq 'healthy') { return $true }
+        }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
 
 # All pubspecs in the monorepo, in dependency order.
 $AllPackages = @('docme_core', 'docme_ui', 'patient_app')
@@ -150,6 +204,12 @@ switch ($Task) {
     }
 
     'db' {
+        # Without this, docker compose fails with an opaque
+        # `Couldn't find env file` that gives no hint about the fix.
+        if (-not (Test-Path -LiteralPath $EnvFile)) {
+            throw "env file not found: $EnvFile`nCopy .env.example to .env first (or pass -EnvFile <path>)."
+        }
+
         # The tools profile carries migrate/psql/test. Those are one-shot jobs,
         # not services, so `up` never starts them; they run and exit.
         switch ($DbTask) {
@@ -157,13 +217,7 @@ switch ($Task) {
                 & docker @Compose up -d db
                 if ($LASTEXITCODE -ne 0) { throw 'failed to start the database' }
                 Write-Host 'waiting for the database to report healthy...'
-                $healthy = $false
-                for ($i = 0; $i -lt 40; $i++) {
-                    $h = docker inspect --format '{{.State.Health.Status}}' docme-db-1 2>$null
-                    if ($h -eq 'healthy') { $healthy = $true; break }
-                    Start-Sleep -Seconds 3
-                }
-                if (-not $healthy) { throw 'database did not become healthy' }
+                if (-not (Wait-DbHealthy)) { throw 'database did not become healthy' }
                 # Bringing the database up without applying migrations leaves a
                 # useless empty schema, so chain straight into them.
                 & docker @Compose --profile tools run --rm migrate
@@ -178,11 +232,7 @@ switch ($Task) {
                 Write-Warning 'reset DESTROYS the database volume. All local data is lost.'
                 & docker @Compose down -v
                 & docker @Compose up -d db
-                for ($i = 0; $i -lt 40; $i++) {
-                    $h = docker inspect --format '{{.State.Health.Status}}' docme-db-1 2>$null
-                    if ($h -eq 'healthy') { break }
-                    Start-Sleep -Seconds 3
-                }
+                if (-not (Wait-DbHealthy)) { throw 'database did not become healthy' }
                 & docker @Compose --profile tools run --rm migrate
                 & docker @Compose --profile tools run --rm test
             }

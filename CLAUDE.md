@@ -93,6 +93,24 @@ first. Running it as the owner silently bypasses every policy and the suite pass
 proving nothing — this exact mistake happened once already and was caught only because
 the test wrote real data and asserted on row counts.
 
+A new table needs **three** things in its migration, not one:
+
+1. `alter table <t> enable row level security;` (plus `force` for app tables)
+2. the policies
+3. an explicit `grant` to `docme_authenticated` / `docme_anon`
+
+Step 3 is easy to forget because `0004_roles.sql` used to grant CRUD on every future
+table by default. That was the unsafe direction: a table that got RLS but no policy, or
+no `enable`, would be silently readable by every logged-in user. `0005_lock_down.sql`
+revokes those defaults and adds a guard that **raises at migration time** if any table
+in `schema public` has RLS disabled. So forgetting a grant now fails loudly with
+"permission denied", which is the failure mode you want. If you see that error, add the
+grant; do not restore blanket default privileges.
+
+Two tables are never client data and are revoked from both client roles:
+`schema_migrations` (client-writable here meant a client could fake a migration as
+applied) and `auth.users` (own-row-only via `auth_users_select_own`).
+
 ## Containers
 
 Postgres runs in Docker; nothing is installed on the host.
@@ -103,6 +121,12 @@ Postgres runs in Docker; nothing is installed on the host.
 .\build.ps1 db psql      # interactive psql
 .\build.ps1 db reset     # DESTRUCTIVE: drop volume, re-migrate, re-test
 .\build.ps1 docker       # build the containerised APK image
+```
+
+First run needs an env file:
+
+```powershell
+copy .env.example .env
 ```
 
 Layout:
@@ -117,11 +141,35 @@ Layout:
 | `supabase/tests/rls_test.sql` | Executable proof the access rules hold |
 
 Isolation guarantees: named volumes only (never a host bind mount, so `down -v` is a
-clean reset), no `container_name:` (so `-p <name>` runs a fully separate second copy),
-and every published port bound to `127.0.0.1` because this database holds PHI.
+clean reset), and every published port bound to `127.0.0.1` because this database
+holds PHI.
+
+Nothing declares `container_name:` **or** an explicit volume/network `name:`. Both were
+a real bug: a pinned `name: docme_pgdata` is a global resource, so a second stack
+started with `-p docme-b` would attach to the *first* stack's database, and `down -v`
+on either would destroy the other's data. Compose derives both from the project name.
+
+A second copy needs its own env file, because the project name *and* the published
+port both come from there:
+
+```powershell
+copy .env .env.b     # then set COMPOSE_PROJECT_NAME=docme-b and POSTGRES_PORT=54330
+.\build.ps1 db up -EnvFile .env.b
+```
 
 Migrations are **append-only**. `schema_migrations` records applied filenames, so editing
 an already-applied file does nothing on re-run. If you change one, reset the volume.
+
+`docker/migrate.sh` runs each migration in a **single transaction** that also writes its
+own `schema_migrations` row, taking `pg_advisory_xact_lock` first. Two consequences you
+must respect when writing migrations:
+
+- Never use `CREATE INDEX CONCURRENTLY` or anything else that cannot run in a transaction.
+- Never wrap a migration in your own `BEGIN`/`COMMIT`.
+
+The earlier runner used a session-level `pg_advisory_lock` in a `psql` call that exited
+immediately, so the lock was released before it did anything, and the file and its
+bookkeeping row were separate transactions.
 
 ## Verification (required before considering anything done)
 
