@@ -51,9 +51,16 @@ DocMe/
 │   ├── docme_ui/       # Liquid Glass design system, theme, shared widgets
 │   └── patient_app/    # Flutter app — android/ + ios/
 │   # provider_app/     # Flutter desktop — M7, after mobile is proven
+├── docker/
+│   ├── compose.yaml      # db service + one-shot migrate/psql/test jobs
+│   ├── postgres/         # PostGIS + pgvector image
+│   ├── ci/               # pinned Flutter 3.47.6 image for containerised builds
+│   └── migrate.sh        # idempotent migration runner
 ├── supabase/
-│   ├── migrations/     # schema, RLS policies, PostGIS, seeds
+│   ├── migrations/     # schema, RLS policies, PostGIS, seeds — append-only
+│   ├── tests/          # executable RLS verification
 │   └── functions/      # edge functions: refill detection, push dispatch
+├── build.ps1           # monorepo task runner (db, apk, check, docker)
 ├── .agents/skills/liquid-glass-widgets/SKILL.md
 ├── docs/PLAN.md
 └── CLAUDE.md
@@ -61,6 +68,39 @@ DocMe/
 
 `docme_core` and `docme_ui` are pure Dart packages consumed by both apps, so the domain
 model and the glass design language cannot drift apart.
+
+### Container isolation
+
+The goal is that no service, app, or job can affect another. What that means concretely:
+
+- **Services** run in their own containers. Postgres lives in `docme-db-1`; nothing is
+  installed on the host beyond Docker itself.
+- **State** lives in named Docker volumes, never a host bind mount, so
+  `docker compose down -v` is a complete reset and the host filesystem stays clean.
+- **Parallel copies** work because there is no `container_name:`. Running
+  `docker compose -p docme-b ...` yields a fully separate stack with its own volumes and
+  ports.
+- **Network exposure** is loopback-only. Every published port binds `127.0.0.1` because
+  this database holds PHI; nothing is reachable from the LAN.
+- **Ports are non-default** (`54329`, not `5432`) so we never fight a Postgres the
+  developer already runs.
+- **Apps** are artifacts, not services — a mobile APK cannot be "run" as a container. The
+  app-side guarantee is reproducible disposable builds via `docker/ci/Dockerfile`.
+
+### Role split (verified by `supabase/tests/rls_test.sql`)
+
+| Role | Bypasses RLS | Used for |
+| :--- | :--- | :--- |
+| `docme_app` | yes — superuser + BYPASSRLS | migrations, seeds |
+| `docme_anon` | no | unauthenticated reads of public data |
+| `docme_authenticated` | no | the application |
+
+This split is not theoretical. `POSTGRES_USER` is created as a superuser by the official
+postgres image, and superusers ignore RLS entirely — so while every table had
+`enable`d and `force`d RLS, every query run as that role saw all rows and **the policies
+were silently inert**. The RLS test caught it by asserting on row counts rather than on
+policy existence. Any test asserting access rules must `SET LOCAL ROLE
+docme_authenticated;` first.
 
 ---
 

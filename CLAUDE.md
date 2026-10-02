@@ -82,6 +82,47 @@ Supabase. **RLS is the security boundary, not app-layer checks.** If you add a t
 containing PHI, it gets RLS in the same migration — no exceptions. A provider may read
 `health_records` only for patients with a *completed* appointment with them.
 
+### Roles — do not connect as the owner
+
+`docme_app` is a **superuser with BYPASSRLS**. It exists to run migrations and seeds and
+sees every row. The application must connect as `docme_authenticated` (or `docme_anon` for
+public data), where RLS is fully enforced.
+
+Any test that asserts access rules **must** `SET LOCAL ROLE docme_authenticated;`
+first. Running it as the owner silently bypasses every policy and the suite passes while
+proving nothing — this exact mistake happened once already and was caught only because
+the test wrote real data and asserted on row counts.
+
+## Containers
+
+Postgres runs in Docker; nothing is installed on the host.
+
+```powershell
+.\build.ps1 db up        # start + wait for healthy + migrate
+.\build.ps1 db test      # RLS verification suite
+.\build.ps1 db psql      # interactive psql
+.\build.ps1 db reset     # DESTRUCTIVE: drop volume, re-migrate, re-test
+.\build.ps1 docker       # build the containerised APK image
+```
+
+Layout:
+
+| Path | Purpose |
+| :--- | :--- |
+| `docker/compose.yaml` | `db` service plus one-shot `migrate`/`psql`/`test` jobs |
+| `docker/postgres/Dockerfile` | PostGIS + pgvector image. No schema, no app code. |
+| `docker/migrate.sh` | Applies `supabase/migrations/*.sql`, tracked in `schema_migrations` |
+| `docker/ci/Dockerfile` | Pinned Flutter 3.47.6 + Android SDK for container builds |
+| `supabase/migrations/` | Append-only schema + RLS, applied in filename order |
+| `supabase/tests/rls_test.sql` | Executable proof the access rules hold |
+
+Isolation guarantees: named volumes only (never a host bind mount, so `down -v` is a
+clean reset), no `container_name:` (so `-p <name>` runs a fully separate second copy),
+and every published port bound to `127.0.0.1` because this database holds PHI.
+
+Migrations are **append-only**. `schema_migrations` records applied filenames, so editing
+an already-applied file does nothing on re-run. If you change one, reset the volume.
+
 ## Verification (required before considering anything done)
 
 Use the root task runner. This is a monorepo with three pubspecs, so `flutter`

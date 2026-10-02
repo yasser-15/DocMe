@@ -1,0 +1,123 @@
+# DocMe local development stack.
+#
+# ISOLATION MODEL — the reason this file exists:
+#
+#   * Every service runs in its own container. Nothing is installed on the host
+#     except Docker itself.
+#   * All state lives in named Docker volumes, never a host bind mount, so a
+#     reset is `docker compose down -v` and your host stays clean.
+#   * NO `container_name:` anywhere. Compose auto-generates names scoped to the
+#     project, so two clones of this repo can run side by side without
+#     colliding. Use `-p <name>` to run a second isolated copy.
+#   * Every published port binds to 127.0.0.1 explicitly. DocMe holds PHI; it
+#     must never be reachable from the LAN.
+#   * Ports are deliberately non-default (54329, not 5432) so we do not fight a
+#     Postgres the developer may already be running.
+#   * Credentials come from .env, never from ENV defaults baked into an image.
+#
+# Usage:
+#   docker compose -f docker/compose.yaml up -d db
+#   docker compose -f docker/compose.yaml run --rm migrate
+#   docker compose -f docker/compose.yaml --profile ci build apk-ci
+
+name: docme
+
+services:
+  db:
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
+    image: docme-db:local
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docme}
+      POSTGRES_USER: ${POSTGRES_USER:-docme_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      # Deterministic collation so ORDER BY does not change between machines.
+      POSTGRES_INITDB_ARGS: "--locale=C.UTF-8 --encoding=UTF8"
+    ports:
+      # Loopback only. Never publish to 0.0.0.0.
+      - "127.0.0.1:${POSTGRES_PORT:-54329}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -d/-U so it works without a password, and a real query so we know the
+      # database (not just the socket) is accepting connections.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docme_app} -d ${POSTGRES_DB:-docme} -q"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    # Host clock skew breaks timestamp defaults and expires certificates.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # One-shot. Applies migrations then exits. Not a long-running service.
+  migrate:
+    image: docme-db:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: >-
+        postgres://${POSTGRES_USER:-docme_app}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-docme}
+      MIGRATIONS_DIR: /migrations
+    volumes:
+      # Read-only: a migration run must never be able to edit our source.
+      - ../supabase/migrations:/migrations:ro
+      - ./migrate.sh:/migrate.sh:ro
+    entrypoint: ["sh", "/migrate.sh"]
+    restart: "no"
+    profiles: ["tools"]
+
+  # Interactive psql against the same database. Handy for poking at RLS.
+  psql:
+    image: docme-db:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: >-
+        postgres://${POSTGRES_USER:-docme_app}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-docme}
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-docme_app}
+      PGDATABASE: ${POSTGRES_DB:-docme}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ../supabase:/supabase:ro
+    entrypoint: ["psql"]
+    tty: true
+    stdin_open: true
+    profiles: ["tools"]
+
+  # RLS verification. Runs supabase/tests/rls_test.sql, which SET ROLEs to a
+  # non-superuser — without that the owner bypasses every policy and the suite
+  # would pass while proving nothing. Exits non-zero on failure, so CI fails.
+  test:
+    image: docme-db:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: >-
+        postgres://${POSTGRES_USER:-docme_app}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-docme}
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-docme_app}
+      PGDATABASE: ${POSTGRES_DB:-docme}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ../supabase:/supabase:ro
+    entrypoint:
+      - sh
+      - -c
+      - psql -v ON_ERROR_STOP=1 -f /supabase/tests/rls_test.sql
+    restart: "no"
+    profiles: ["tools"]
+
+volumes:
+  pgdata:
+    name: docme_pgdata
+
+networks:
+  default:
+    name: docme_default

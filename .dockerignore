@@ -1,0 +1,24 @@
+# Keep the build context tiny and never ship secrets into an image layer.
+# Anything listed here is invisible to COPY.
+
+.git
+.gitignore
+.env
+.env.local
+*.pem
+*.key
+
+# Flutter build output
+packages/*/build/
+packages/*/.dart_tool/
+packages/*/.flutter-plugins
+packages/*/.flutter-plugins-dependencies
+
+# Docs and agent config are not needed at build time
+docs/
+.agents/
+*.md
+
+# OS noise
+.DS_Store
+Thumbs.db
