@@ -55,8 +55,7 @@ class ApiClient {
     final base = _config.baseUrl.endsWith('/')
         ? _config.baseUrl.substring(0, _config.baseUrl.length - 1)
         : _config.baseUrl;
-    final uriPath = '';
-    final uriPath = '\\';
+    return Uri.parse(base + path).replace(queryParameters: queryParams);
   }
   Result<T> _handleResponse<T>(
     http.Response response,
@@ -93,13 +92,13 @@ class ApiClient {
         ? DocMeFailureKind.unauthorized
         : response.statusCode == 403
             ? DocMeFailureKind.permissionDenied
-            : response.statusCode == 404
-                ? DocMeFailureKind.notFound
-                : response.statusCode == 409
-                    ? DocMeFailureKind.conflict
-                    : response.statusCode >= 400 && response.statusCode < 500
-                        ? DocMeFailureKind.validation
-                        : DocMeFailureKind.server;
+        : response.statusCode == 404
+            ? DocMeFailureKind.notFound
+        : response.statusCode == 409
+            ? DocMeFailureKind.conflict
+        : response.statusCode >= 400 && response.statusCode < 500
+            ? DocMeFailureKind.validation
+        : DocMeFailureKind.server;
 
     return Err(DocMeFailure(
       kind: kind,
