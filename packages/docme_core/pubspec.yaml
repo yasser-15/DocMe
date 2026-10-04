@@ -1,5 +1,5 @@
 name: docme_core
-description: "DocMe domain layer — models, repositories, Postgres/RLS access, and country adapters."
+description: \"DocMe domain layer - models, repositories, API client for Django backend.\"
 version: 0.1.0
 publish_to: 'none'
 
@@ -7,21 +7,13 @@ environment:
   sdk: ^3.13.5
 
 dependencies:
-  # Direct Postgres wire protocol. There is no PostgREST/GoTrue in the compose
-  # stack, so supabase_flutter was removed — it expects an HTTP API that does not
-  # exist here. See supabase/migrations/0006_app_access.sql for how identity and
-  # SET ROLE are established instead.
-  postgres: ^3.5.18
-  # PBKDF2-SHA256 for password hashing. Only the derived hash is ever sent to the
-  # database, never the password itself.
-  cryptography: ^2.9.0
   intl: ^0.20.3
-  # For String.characters in initials. Implicit in any Flutter app, but docme_core
-  # is pure Dart with no Flutter dependency, so it has to be declared explicitly —
-  # relying on it arriving transitively would break the moment the app's
-  # dependency tree changed.
   characters: ^1.4.0
+  http: ^1.5.0
+  json_annotation: ^4.9.0
 
 dev_dependencies:
   test: ^1.25.0
   lints: ^6.0.0
+  build_runner: ^2.4.13
+  json_serializable: ^6.9.0

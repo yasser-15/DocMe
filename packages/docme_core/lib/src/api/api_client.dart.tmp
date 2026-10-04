@@ -1,0 +1,61 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+
+import '../failure.dart';
+
+class ApiConfig {
+  const ApiConfig({
+    required this.baseUrl,
+    this.timeout = const Duration(seconds: 30),
+  });
+
+  factory ApiConfig.fromEnvironment() {
+    return ApiConfig(
+      baseUrl: const String.fromEnvironment(
+        'DOCME_API_BASE_URL',
+        defaultValue: 'http://10.0.2.2:8000',
+      ),
+      timeout: const Duration(
+        seconds: int.fromEnvironment(
+          'DOCME_API_TIMEOUT_SECONDS',
+          defaultValue: 30,
+        ),
+      ),
+    );
+  }
+
+  final String baseUrl;
+  final Duration timeout;
+}
+
+class ApiClient {
+  ApiClient({
+    ApiConfig? config,
+    http.Client? client,
+  })  : _config = config ?? ApiConfig.fromEnvironment(),
+        _client = client ?? http.Client();
+
+  final ApiConfig _config;
+  final http.Client _client;
+
+  Future<Map<String, String>> _headers({String? token}) async {
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer ';
+    }
+    return headers;
+  }
+
+  Uri _buildUri(String path, [Map<String, dynamic>? queryParams]) {
+    final base = _config.baseUrl.endsWith('/')
+        ? _config.baseUrl.substring(0, _config.baseUrl.length - 1)
+        : _config.baseUrl;
+    final uriPath = '';
+    return Uri.parse(uriPath).replace(queryParameters: queryParams);
+  }
+
